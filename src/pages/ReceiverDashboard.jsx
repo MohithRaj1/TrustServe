@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MapPin, Clock, ChevronRight, X, Phone, Mail, RefreshCw } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
+import L from 'leaflet';
 import { useApp } from '../context/AppContext';
 import { receivers, donors } from '../data/mockData';
 import Navbar from '../components/Navbar';
@@ -67,29 +69,50 @@ const getCompassDirection = (from, to) => {
   return directions[index];
 };
 
-const buildMapUrl = (origin, destination) => {
-  if (!origin) return null;
-  const centerLat = destination ? (origin.lat + destination.lat) / 2 : origin.lat;
-  const centerLon = destination ? (origin.lon + destination.lon) / 2 : origin.lon;
-  const markers = [`${origin.lat},${origin.lon},red1`];
-  if (destination) markers.push(`${destination.lat},${destination.lon},blue2`);
-  const path = destination ? `&path=${origin.lat},${origin.lon}|${destination.lat},${destination.lon}` : '';
-  return `https://staticmap.openstreetmap.de/staticmap.php?center=${centerLat},${centerLon}&zoom=13&size=860x320&markers=${markers.join('|')}${path}`;
-};
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: new URL('leaflet/dist/images/marker-icon-2x.png', import.meta.url).href,
+  iconUrl: new URL('leaflet/dist/images/marker-icon.png', import.meta.url).href,
+  shadowUrl: new URL('leaflet/dist/images/marker-shadow.png', import.meta.url).href,
+});
 
-const buildGoogleMapsEmbedUrl = (origin, destination) => {
-  const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-  if (!key) return null;
-  if (origin && destination) {
-    const originParam = typeof origin.lat === 'number' ? `${origin.lat},${origin.lon}` : origin;
-    const destParam = typeof destination.lat === 'number' ? `${destination.lat},${destination.lon}` : destination;
-    return `https://www.google.com/maps/embed/v1/directions?key=${key}&origin=${encodeURIComponent(originParam)}&destination=${encodeURIComponent(destParam)}&mode=driving`;
-  }
-  if (origin) {
-    const place = typeof origin.lat === 'number' ? `${origin.lat},${origin.lon}` : origin;
-    return `https://www.google.com/maps/embed/v1/place?key=${key}&q=${encodeURIComponent(place)}`;
-  }
-  return null;
+const LeafletRouteMap = ({ receiverCoords, receiverName, donorCoords, activeDonation }) => {
+  const center = donorCoords || receiverCoords;
+  const bounds = donorCoords
+    ? [[receiverCoords.lat, receiverCoords.lon], [donorCoords.lat, donorCoords.lon]]
+    : null;
+
+  return (
+    <MapContainer
+      center={[center.lat, center.lon]}
+      zoom={13}
+      style={{ width: '100%', minHeight: 320, height: '100%' }}
+      scrollWheelZoom={false}
+      {...(donorCoords ? { bounds, boundsOptions: { padding: [40, 40] } } : {})}
+    >
+      <TileLayer
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution='&copy; OpenStreetMap contributors'
+      />
+      <Marker position={[receiverCoords.lat, receiverCoords.lon]}>
+        <Popup>{receiverName} (Receiver)</Popup>
+      </Marker>
+      {donorCoords && (
+        <>
+          <Marker position={[donorCoords.lat, donorCoords.lon]}>
+            <Popup>{activeDonation?.donorName || 'Pickup location'}</Popup>
+          </Marker>
+          <Polyline
+            positions={[
+              [receiverCoords.lat, receiverCoords.lon],
+              [donorCoords.lat, donorCoords.lon],
+            ]}
+            pathOptions={{ color: '#2d6a2d', weight: 4, opacity: 0.8 }}
+          />
+        </>
+      )}
+    </MapContainer>
+  );
 };
 
 // Map ping dots
@@ -208,8 +231,12 @@ const DonationCard = ({ donation, index, onAccept, onSelect, selected }) => {
       {/* Urgency strip */}
       <div style={{height:4,background:u.strip}}/>
       {/* Food image area */}
-      <div style={{height:112,background:`linear-gradient(135deg, ${u.bg}, white)`,display:'flex',alignItems:'center',justifyContent:'center',position:'relative'}}>
-        <span style={{fontSize:'3rem'}}>{getEmoji(donation.foodType)}</span>
+      <div style={{height:112,display:'flex',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden',background:`linear-gradient(135deg, ${u.bg}, white)`}}>
+        {donation.photo ? (
+          <img src={donation.photo} alt={donation.foodType} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        ) : (
+          <span style={{fontSize:'3rem'}}>{getEmoji(donation.foodType)}</span>
+        )}
         <div style={{position:'absolute',top:10,right:10}}>
           <span className={u.cls}>{u.dot} {donation.urgency.charAt(0).toUpperCase()+donation.urgency.slice(1)}</span>
         </div>
@@ -280,7 +307,6 @@ export default function ReceiverDashboard() {
   const activeDonation = selectedDonation || null;
   const receiverCoords = receiver.coordinates || { lat: 12.9698, lon: 77.7490 };
   const donorCoords = activeDonation ? donors.find(d => d.id === activeDonation.donorId)?.coordinates : null;
-  const mapUrl = buildMapUrl(receiverCoords, donorCoords);
   const routeDistance = getDistanceKm(receiverCoords, donorCoords);
   const routeDirection = getCompassDirection(receiverCoords, donorCoords);
 
@@ -386,14 +412,12 @@ export default function ReceiverDashboard() {
 
             {/* Map preview */}
             <div style={{height:320,position:'relative',overflow:'hidden',background:'#f4f7f4',display:'flex',alignItems:'center',justifyContent:'center'}}>
-              {mapUrl ? (
-                <img src={mapUrl} alt="Route preview" style={{width:'100%',height:'100%',objectFit:'cover'}} />
-              ) : (
-                <div style={{padding:24,textAlign:'center',color:'var(--text-secondary)'}}>
-                  <p style={{margin:0,fontSize:'1rem',fontWeight:700}}>Map preview unavailable</p>
-                  <p style={{margin:'6px 0 0',fontSize:'0.88rem'}}>Check the selected donation or receiver location.</p>
-                </div>
-              )}
+              <LeafletRouteMap
+                receiverCoords={receiverCoords}
+                receiverName={receiver.name}
+                donorCoords={donorCoords}
+                activeDonation={activeDonation}
+              />
 
               <div style={{position:'absolute',bottom:12,left:12,right:12,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap',background:'rgba(255,255,255,0.92)',border:'1px solid var(--border)',borderRadius:12,padding:'14px 16px',fontSize:'0.85rem',color:'var(--text-secondary)'}}>
                 <div style={{display:'flex',flexDirection:'column',gap:4}}>

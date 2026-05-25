@@ -56,7 +56,40 @@ const LandingPage = () => {
   const [ngosCount, setNgosCount] = useState(0);
   const [verifCount, setVerifCount] = useState(0);
 
+  const [mealData, setMealData] = useState(null);
+  const [mealLoading, setMealLoading] = useState(true);
+  const [mealError, setMealError] = useState('');
+
   const closeMobile = useCallback(() => setMobileOpen(false), []);
+
+  const fetchMealSuggestion = useCallback(async () => {
+    setMealLoading(true);
+    setMealError('');
+    try {
+      const response = await fetch('https://www.themealdb.com/api/json/v1/1/random.php');
+      if (!response.ok) throw new Error('Failed to load meal inspiration');
+      const data = await response.json();
+      const meal = data?.meals?.[0];
+      if (!meal) throw new Error('No meal information returned');
+      setMealData({
+        title: meal.strMeal,
+        category: meal.strCategory,
+        cuisine: meal.strArea,
+        thumb: meal.strMealThumb,
+        instructions: meal.strInstructions?.split('\n').filter(Boolean).slice(0, 3).join(' '),
+        source: meal.strSource || meal.strYoutube || '',
+      });
+    } catch (error) {
+      setMealError(error.message || 'Unable to fetch meal inspiration.');
+      setMealData(null);
+    } finally {
+      setMealLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchMealSuggestion();
+  }, [fetchMealSuggestion]);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 50);
@@ -349,6 +382,63 @@ const LandingPage = () => {
                     <div className="text-xs text-gray-500 mt-1">🏢 City Bakery • 4.1 km</div>
                   </div>
                   <div className="urgency-safe text-[10px] sm:text-[11px] px-2 py-1 shrink-0">Safe</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* LIVE MEAL INSPIRATION */}
+      <section className="py-12 px-4 sm:px-6 max-w-7xl mx-auto">
+        <div className="rounded-[32px] border border-gray-100 bg-white shadow-[0_30px_80px_-40px_rgba(15,23,42,0.18)] overflow-hidden reveal">
+          <div className="px-6 py-8 sm:px-8 sm:py-10 lg:flex lg:items-center lg:justify-between gap-8">
+            <div className="max-w-2xl">
+              <p className="section-label">Meal Inspiration</p>
+              <h2 className="hero-heading text-3xl sm:text-4xl md:text-[3rem] font-bold leading-tight">
+                Live recipe ideas from the MealDB API.
+              </h2>
+              <p className="text-muted mt-4 max-w-xl text-sm sm:text-base">
+                Every visit brings a fresh food story — perfect for donors and receivers who care about meaningful meals and sustainable redistribution.
+              </p>
+            </div>
+            <div className="mt-8 lg:mt-0 flex-1">
+              <div className="rounded-[28px] overflow-hidden border border-gray-100 bg-surface">
+                {mealLoading ? (
+                  <div className="p-8 text-center text-sm text-gray-500">Loading meal inspiration…</div>
+                ) : mealError ? (
+                  <div className="p-8 text-center text-sm text-red-600">{mealError}</div>
+                ) : (
+                  <div className="grid gap-4 sm:grid-cols-[1.2fr_0.8fr]">
+                    <div className="p-6">
+                      <div className="text-xs uppercase font-semibold tracking-[0.15em] text-primary">{mealData.category} · {mealData.cuisine}</div>
+                      <h3 className="mt-3 font-bold text-xl text-gray-900">{mealData.title}</h3>
+                      <p className="mt-4 text-sm leading-6 text-gray-600">{mealData.instructions}</p>
+                      {mealData.source && (
+                        <a
+                          href={mealData.source}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-2 mt-6 text-sm font-semibold text-primary hover:underline"
+                        >
+                          View full recipe
+                        </a>
+                      )}
+                    </div>
+                    <div className="h-full bg-cover bg-center" style={{ backgroundImage: `url(${mealData.thumb})` }}>
+                      <img src={mealData.thumb} alt={mealData.title} className="w-full h-full object-cover" />
+                    </div>
+                  </div>
+                )}
+                <div className="px-6 py-4 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white">
+                  <span className="text-xs text-gray-500">Updated live from an open public API.</span>
+                  <button
+                    type="button"
+                    onClick={fetchMealSuggestion}
+                    className="btn-primary rounded-full px-4 py-2 text-sm"
+                  >
+                    Refresh inspiration
+                  </button>
                 </div>
               </div>
             </div>
