@@ -1,0 +1,9 @@
+ngo_name,ngo_type,capacity,current_load,urgency_level_supported,latitude,longitude,service_radius_km
+Hope Haven,orphanage,120,80,low,12.9716,77.5946,15
+Silver Care,old_age_home,90,65,medium,12.9352,77.6245,12
+Food Shelter,shelter,150,110,high,12.9611,77.6387,10
+Blessed Hearts,orphanage,100,70,medium,12.9853,77.5605,14
+Kindness Home,old_age_home,80,50,high,12.9542,77.4900,15
+Sunrise Shelter,shelter,130,95,low,12.9985,77.5838,13
+Care Connect,orphanage,110,88,high,13.0217,77.5716,15
+Warm Hands,old_age_home,70,40,medium,12.9538,77.5700,12

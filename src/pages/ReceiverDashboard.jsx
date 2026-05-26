@@ -44,7 +44,25 @@ const LOCATION_COORDS = {
   'Shivajinagar, Bangalore': { lat: 12.9799, lon: 77.5970 },
 };
 
-const getLocationCoords = (location) => LOCATION_COORDS[location] || null;
+const getLocationCoords = (location) => {
+  if (!location) return { lat: 12.9716, lon: 77.5946 };
+  const normalized = location.toLowerCase().trim();
+  for (const [key, value] of Object.entries(LOCATION_COORDS)) {
+    const keyLower = key.toLowerCase();
+    if (normalized.includes(keyLower) || keyLower.includes(normalized)) {
+      return value;
+    }
+  }
+  const firstWord = normalized.split(/[\s,]+/)[0];
+  if (firstWord) {
+    for (const [key, value] of Object.entries(LOCATION_COORDS)) {
+      if (key.toLowerCase().includes(firstWord)) {
+        return value;
+      }
+    }
+  }
+  return { lat: 12.9716, lon: 77.5946 };
+};
 
 const getDistanceKm = (from, to) => {
   if (!from || !to) return null;
@@ -82,36 +100,153 @@ const LeafletRouteMap = ({ receiverCoords, receiverName, donorCoords, activeDona
     ? [[receiverCoords.lat, receiverCoords.lon], [donorCoords.lat, donorCoords.lon]]
     : null;
 
+  // Generate route using OSRM public routing service for realistic road geometry
+  const [routePath, setRoutePath] = useState([]);
+  const [routeError, setRouteError] = useState(null);
+
+  useEffect(() => {
+    if (!donorCoords || !receiverCoords) {
+      setRoutePath([]);
+      return;
+    }
+    const fetchRoute = async () => {
+      try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${donorCoords.lon},${donorCoords.lat};${receiverCoords.lon},${receiverCoords.lat}?overview=full&geometries=geojson`;
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('OSRM request failed');
+        const data = await resp.json();
+        if (data.routes && data.routes.length > 0) {
+          const coords = data.routes[0].geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+          setRoutePath(coords);
+          setRouteError(null);
+        } else {
+          setRoutePath([[donorCoords.lat, donorCoords.lon], [receiverCoords.lat, receiverCoords.lon]]);
+          setRouteError('No route found');
+        }
+      } catch (e) {
+        console.error('Routing error, falling back to direct line:', e);
+        setRouteError(e.message);
+        setRoutePath([[donorCoords.lat, donorCoords.lon], [receiverCoords.lat, receiverCoords.lon]]);
+      }
+    };
+    fetchRoute();
+  }, [donorCoords, receiverCoords]);
+
+  // Animate delivery truck marker along the fetched route
+  const [progress, setProgress] = useState(0);
+  useEffect(() => {
+    if (routePath.length === 0) return;
+    setProgress(0);
+    const interval = setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= 1) return 0; // Loop animation
+        return prev + 0.015; // smooth progress steps
+      });
+    }, 150);
+    return () => clearInterval(interval);
+  }, [routePath]);
+
+  const truckPos = useMemo(() => {
+    if (routePath.length === 0) return null;
+    const totalSegments = routePath.length - 1;
+    const segmentIndex = Math.min(
+      Math.floor(progress * totalSegments),
+      totalSegments - 1
+    );
+    const segmentProgress = (progress * totalSegments) - segmentIndex;
+    const start = routePath[segmentIndex];
+    const end = routePath[segmentIndex + 1];
+    
+    const lat = start[0] + (end[0] - start[0]) * segmentProgress;
+    const lon = start[1] + (end[1] - start[1]) * segmentProgress;
+    return [lat, lon];
+  }, [routePath, progress]);
+
+  // Premium Custom Icons for a stunning UI
+  const receiverIcon = L.divIcon({
+    html: `<div style="background-color: #2d6a2d; color: white; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2.5px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.25); font-size: 16px;">🏢</div>`,
+    className: 'custom-pin-receiver',
+    iconSize: [34, 34],
+    iconAnchor: [17, 17]
+  });
+
+  const donorIcon = L.divIcon({
+    html: `<div style="background-color: #e07b2a; color: white; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2.5px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.25); font-size: 16px;">🏪</div>`,
+    className: 'custom-pin-donor',
+    iconSize: [34, 34],
+    iconAnchor: [17, 17]
+  });
+
+  const truckIcon = L.divIcon({
+    html: `<div style="background-color: #3b82f6; color: white; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2.5px solid white; box-shadow: 0 5px 15px rgba(59,130,246,0.45); font-size: 18px; animation: map-bounce 0.8s infinite alternate;">🚚</div>`,
+    className: 'custom-pin-truck',
+    iconSize: [36, 36],
+    iconAnchor: [18, 18]
+  });
+
   return (
-    <MapContainer
-      center={[center.lat, center.lon]}
-      zoom={13}
-      style={{ width: '100%', minHeight: 320, height: '100%' }}
-      scrollWheelZoom={false}
-      {...(donorCoords ? { bounds, boundsOptions: { padding: [40, 40] } } : {})}
-    >
-      <TileLayer
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        attribution='&copy; OpenStreetMap contributors'
-      />
-      <Marker position={[receiverCoords.lat, receiverCoords.lon]}>
-        <Popup>{receiverName} (Receiver)</Popup>
-      </Marker>
-      {donorCoords && (
-        <>
-          <Marker position={[donorCoords.lat, donorCoords.lon]}>
-            <Popup>{activeDonation?.donorName || 'Pickup location'}</Popup>
-          </Marker>
-          <Polyline
-            positions={[
-              [receiverCoords.lat, receiverCoords.lon],
-              [donorCoords.lat, donorCoords.lon],
-            ]}
-            pathOptions={{ color: '#2d6a2d', weight: 4, opacity: 0.8 }}
-          />
-        </>
-      )}
-    </MapContainer>
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      <style>{`
+        @keyframes map-bounce {
+          from { transform: translateY(0); }
+          to { transform: translateY(-4px); }
+        }
+      `}</style>
+      <MapContainer
+        center={[center.lat, center.lon]}
+        zoom={13}
+        style={{ width: '100%', minHeight: 320, height: '100%' }}
+        scrollWheelZoom={false}
+        {...(donorCoords ? { bounds, boundsOptions: { padding: [40, 40] } } : {})}
+      >
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; OpenStreetMap contributors'
+        />
+        <Marker position={[receiverCoords.lat, receiverCoords.lon]} icon={receiverIcon}>
+          <Popup>
+            <div style={{ fontFamily: 'Inter, sans-serif', fontWeight: 600 }}>
+              🏢 {receiverName} <br />
+              <span style={{ fontSize: '11px', color: '#666' }}>Dropoff Point (NGO)</span>
+            </div>
+          </Popup>
+        </Marker>
+        {donorCoords && (
+          <>
+            <Marker position={[donorCoords.lat, donorCoords.lon]} icon={donorIcon}>
+              <Popup>
+                <div style={{ fontFamily: 'Inter, sans-serif', fontWeight: 600 }}>
+                  🏪 {activeDonation?.donorName || 'Pickup Location'} <br />
+                  <span style={{ fontSize: '11px', color: '#666' }}>Pickup Point (Surplus Donor)</span>
+                </div>
+              </Popup>
+            </Marker>
+            
+            {/* Draw beautiful realistic street paths */}
+            <Polyline
+              positions={routePath}
+              pathOptions={{ color: '#2d6a2d', weight: 5, opacity: 0.85, lineCap: 'round', lineJoin: 'round', dashArray: '1, 10' }}
+            />
+            <Polyline
+              positions={routePath}
+              pathOptions={{ color: '#4ade80', weight: 3, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }}
+            />
+
+            {/* Live Moving Marker along the path */}
+            {truckPos && (
+              <Marker position={truckPos} icon={truckIcon}>
+                <Popup>
+                  <div style={{ fontFamily: 'Inter, sans-serif', fontWeight: 600, fontSize: '11px' }}>
+                    🚚 Live Tracking in Progress... <br />
+                    Speed: 24 km/h · E.T.A: 4 mins
+                  </div>
+                </Popup>
+              </Marker>
+            )}
+          </>
+        )}
+      </MapContainer>
+    </div>
   );
 };
 
@@ -305,8 +440,10 @@ export default function ReceiverDashboard() {
   const receiver = currentUser || baseReceiver || receivers[0];
   const available = donations.filter(d => d.status === 'pending' || d.status === 'accepted');
   const activeDonation = selectedDonation || null;
-  const receiverCoords = receiver.coordinates || { lat: 12.9698, lon: 77.7490 };
-  const donorCoords = activeDonation ? donors.find(d => d.id === activeDonation.donorId)?.coordinates : null;
+  const receiverCoords = receiver.coordinates || getLocationCoords(receiver.location) || { lat: 12.9698, lon: 77.7490 };
+  const donorCoords = activeDonation 
+    ? (donors.find(d => d.id === activeDonation.donorId)?.coordinates || getLocationCoords(activeDonation.pickupLocation))
+    : null;
   const routeDistance = getDistanceKm(receiverCoords, donorCoords);
   const routeDirection = getCompassDirection(receiverCoords, donorCoords);
 
@@ -411,7 +548,7 @@ export default function ReceiverDashboard() {
             </div>
 
             {/* Map preview */}
-            <div style={{height:320,position:'relative',overflow:'hidden',background:'#f4f7f4',display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <div style={{height:380,position:'relative',overflow:'hidden',background:'#f4f7f4',display:'flex',alignItems:'center',justifyContent:'center'}}>
               <LeafletRouteMap
                 receiverCoords={receiverCoords}
                 receiverName={receiver.name}
@@ -419,20 +556,53 @@ export default function ReceiverDashboard() {
                 activeDonation={activeDonation}
               />
 
-              <div style={{position:'absolute',bottom:12,left:12,right:12,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap',background:'rgba(255,255,255,0.92)',border:'1px solid var(--border)',borderRadius:12,padding:'14px 16px',fontSize:'0.85rem',color:'var(--text-secondary)'}}>
-                <div style={{display:'flex',flexDirection:'column',gap:4}}>
-                  <span style={{fontWeight:700,color:'var(--text-primary)'}}>Route preview</span>
-                  <span>
-                    {activeDonation
-                      ? `From ${receiver.location} to ${activeDonation.pickupLocation}`
-                      : 'Tap a donation card below to preview its pickup location and direction.'}
-                  </span>
-                </div>
-                <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center'}}>
-                  <span className="badge-gray">Distance: {routeDistance ? `${routeDistance} km` : 'unknown'}</span>
-                  <span className="badge-gray">Direction: {routeDirection || 'unknown'}</span>
-                  <span className="badge-gray">Status: {activeDonation ? activeDonation.status.charAt(0).toUpperCase() + activeDonation.status.slice(1) : 'None selected'}</span>
-                </div>
+              <div style={{position:'absolute',bottom:12,left:12,right:12,background:'rgba(255,255,255,0.95)',backdropFilter:'blur(8px)',border:'1px solid var(--border)',borderRadius:14,padding:'16px 18px',boxShadow:'0 4px 20px rgba(0,0,0,0.08)'}}>
+                {activeDonation ? (
+                  <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
+                    {/* Route flow: Pickup → Dropoff */}
+                    <div style={{flex:1,minWidth:180,display:'flex',flexDirection:'column',gap:6}}>
+                      <div style={{display:'flex',alignItems:'center',gap:8}}>
+                        <div style={{width:10,height:10,borderRadius:'50%',background:'#e07b2a',flexShrink:0,boxShadow:'0 0 0 3px rgba(224,123,42,0.2)'}} />
+                        <div>
+                          <span style={{fontSize:'0.68rem',fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.05em'}}>Pickup</span>
+                          <p style={{margin:0,fontSize:'0.82rem',fontWeight:700,color:'var(--text-primary)'}}>{activeDonation.pickupLocation}</p>
+                        </div>
+                      </div>
+                      <div style={{width:1,height:14,background:'var(--border)',marginLeft:4}} />
+                      <div style={{display:'flex',alignItems:'center',gap:8}}>
+                        <div style={{width:10,height:10,borderRadius:'50%',background:'#2d6a2d',flexShrink:0,boxShadow:'0 0 0 3px rgba(45,106,45,0.2)'}} />
+                        <div>
+                          <span style={{fontSize:'0.68rem',fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.05em'}}>Dropoff</span>
+                          <p style={{margin:0,fontSize:'0.82rem',fontWeight:700,color:'var(--text-primary)'}}>{receiver.location}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Stats badges */}
+                    <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end'}}>
+                      <div style={{display:'flex',gap:6,flexWrap:'wrap',justifyContent:'flex-end'}}>
+                        <span style={{background:'rgba(45,106,45,0.1)',color:'#2d6a2d',border:'1px solid rgba(45,106,45,0.2)',fontSize:'0.73rem',fontWeight:700,padding:'3px 10px',borderRadius:20}}>
+                          📍 {routeDistance ? `${routeDistance} km` : '—'}
+                        </span>
+                        <span style={{background:'rgba(59,130,246,0.1)',color:'#3b82f6',border:'1px solid rgba(59,130,246,0.2)',fontSize:'0.73rem',fontWeight:700,padding:'3px 10px',borderRadius:20}}>
+                          ⏱ ~{routeDistance ? Math.max(Math.ceil(routeDistance * 3), 2) : '—'} min
+                        </span>
+                        <span style={{background:'rgba(224,123,42,0.1)',color:'#e07b2a',border:'1px solid rgba(224,123,42,0.2)',fontSize:'0.73rem',fontWeight:700,padding:'3px 10px',borderRadius:20}}>
+                          🧭 {routeDirection}
+                        </span>
+                      </div>
+                      <div style={{display:'flex',alignItems:'center',gap:5}}>
+                        <span style={{width:7,height:7,borderRadius:'50%',background:'#22c55e',display:'inline-block',animation:'ping 1.5s cubic-bezier(0,0,0.2,1) infinite'}} />
+                        <span style={{fontSize:'0.72rem',fontWeight:600,color:'#22c55e'}}>Live Tracking Active</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{textAlign:'center',padding:'6px 0'}}>
+                    <p style={{margin:0,fontSize:'0.88rem',fontWeight:700,color:'var(--text-primary)'}}>📍 Select a donation to preview the route</p>
+                    <p style={{margin:'4px 0 0',fontSize:'0.78rem',color:'var(--text-muted)'}}>Click "View route" on any card below to see the live pickup → dropoff path</p>
+                  </div>
+                )}
               </div>
             </div>
 

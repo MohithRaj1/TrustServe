@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, Clock, ArrowRight, ChevronRight } from 'lucide-react';
+import { MapPin, Clock, ArrowRight, ChevronRight, Brain, Sparkles, RefreshCw, AlertTriangle, CheckCircle, Trash2, ShieldCheck, Image } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { donors } from '../data/mockData';
 import Navbar from '../components/Navbar';
+import { useAI } from '../hooks/useAI';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -124,9 +125,7 @@ const DonationCard = ({ donation, index, activeFilter }) => {
               <p style={{ margin: 0, fontWeight: 700, fontSize: '0.88rem', color: 'var(--text-primary)', lineHeight: 1.3 }}>
                 {donation.foodType}
               </p>
-              <p style={{ margin: 0, fontSize: '0.76rem', color: 'var(--text-muted)', fontWeight: 500, marginTop: 2 }}>
-                {donation.quantity}
-              </p>
+              <p style={{ margin: 0, fontSize: '1.2rem', color: 'var(--text-primary)', fontWeight: 700, marginTop: 4 }}><span style={{ fontWeight: 500, marginRight: 4 }}>Quantity:</span>{donation.quantity}</p>
             </div>
           </div>
           <span className={u.cls} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
@@ -168,6 +167,10 @@ const UploadForm = ({ donor, onSubmit }) => {
     foodName: '', quantity: '', unit: 'servings', expiryTime: '', location: '',
   });
   const [dragging, setDragging] = useState(false);
+  const handleQuantityChange = (e) => {
+    const val = e.target.value;
+    setForm((f) => ({ ...f, quantity: val }));
+  };
   const [success, setSuccess] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
   const [uploadError, setUploadError] = useState('');
@@ -270,7 +273,7 @@ const UploadForm = ({ donor, onSubmit }) => {
       )}
 
       <form onSubmit={handleSubmit}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 0.65fr', gap: 14 }}>
           <div style={{ gridColumn: '1 / -1' }}>
             <label className="section-label">Food Name / Description *</label>
             <input
@@ -287,9 +290,11 @@ const UploadForm = ({ donor, onSubmit }) => {
             <div style={{ display: 'flex', gap: 8 }}>
               <input
                 className="input-field"
-                type="number" min="1"
+                type="number"
+                min="0"
+                step="any"
                 value={form.quantity}
-                onChange={set('quantity')}
+                onChange={handleQuantityChange}
                 placeholder="50"
                 required
                 style={{ flex: 1 }}
@@ -298,7 +303,7 @@ const UploadForm = ({ donor, onSubmit }) => {
                 className="input-field"
                 value={form.unit}
                 onChange={set('unit')}
-                style={{ width: 120 }}
+                style={{ width: 80 }}
               >
                 {UNITS.map((u) => <option key={u}>{u}</option>)}
               </select>
@@ -376,6 +381,27 @@ const DonorDashboard = () => {
   const { currentUser, donations, addDonation } = useApp();
   const [filter, setFilter] = useState('All');
 
+  // AI Estimator state
+  const { predictAll, predictImageFreshness, loading: aiLoading } = useAI();
+
+  // AI parameters (with nice defaults synchronized with Bangalore coordinates & standard conditions)
+  const [aiParams, setAiParams] = useState({
+    foodType: 'vegetables',
+    cookedHoursAgo: 2,
+    temperatureC: 25,
+    humidity: 50,
+    eventType: 'wedding',
+    guestCount: 100,
+    foodPreparedKg: 35,
+    donorLatitude: 12.9716,
+    donorLongitude: 77.5946,
+    urgencyLevel: 'medium',
+  });
+
+  const [aiResults, setAiResults] = useState(null);
+  const [cvResult, setCvResult] = useState(null);
+  const [selectedSampleImage, setSelectedSampleImage] = useState('');
+
   const baseDonor = donors.find((d) => d.id === currentUser?.id);
   const donor = currentUser || baseDonor || donors[0];
   const myDonations = donations.filter((d) => d.donorId === donor.id || d.donorName === donor.name);
@@ -385,6 +411,44 @@ const DonorDashboard = () => {
   const filtered = filter === 'All'
     ? myDonations
     : myDonations.filter((d) => d.status === filter.toLowerCase());
+
+  // Run AI Integration on parameter change
+  const runAIPrediction = async () => {
+    try {
+      const data = await predictAll({
+        food_type: aiParams.foodType,
+        cooked_hours_ago: Number(aiParams.cookedHoursAgo),
+        temperature_c: Number(aiParams.temperatureC),
+        humidity: Number(aiParams.humidity),
+        event_type: aiParams.eventType,
+        guest_count: Number(aiParams.guestCount),
+        food_prepared_kg: Number(aiParams.foodPreparedKg),
+        donor_latitude: Number(aiParams.donorLatitude),
+        donor_longitude: Number(aiParams.donorLongitude),
+        urgency_level: aiParams.urgencyLevel,
+      });
+      setAiResults(data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => { runAIPrediction(); }, 500);
+    return () => clearTimeout(timer);
+  }, [aiParams]);
+
+  // Handle image freshness classification call
+  const handleCVFreshnessTest = async (imagePath, sampleName) => {
+    setSelectedSampleImage(sampleName);
+    try {
+      const result = await predictImageFreshness(imagePath);
+      setCvResult(result.image_freshness_prediction);
+    } catch (e) {
+      console.error(e);
+      setCvResult('error');
+    }
+  };
 
   return (
     <div className="page-bg">
@@ -484,10 +548,269 @@ const DonorDashboard = () => {
         </aside>
 
         {/* ── Main Content ── */}
-        <main style={{ flex: 1, minWidth: 0 }}>
+        <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 24 }}>
 
-          {/* Upload Form */}
-          <UploadForm donor={donor} onSubmit={addDonation} />
+          {/* Form + AI Sandbox Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 24, alignItems: 'start' }}>
+            {/* Upload Form */}
+            <UploadForm donor={donor} onSubmit={addDonation} />
+
+            {/* AI Distribution Assistant Panel */}
+            <div className="card" style={{
+              padding: 24, 
+              backgroundColor: '#ffffff', 
+              borderRadius: 16, 
+              border: '1px solid rgba(45,106,45,0.2)', 
+              boxShadow: '0 8px 30px rgba(45,106,45,0.06)',
+              position: 'relative',
+              overflow: 'hidden'
+            }}>
+              {/* Premium Glow effect */}
+              <div style={{ position: 'absolute', top: -50, right: -50, width: 150, height: 150, borderRadius: '50%', background: 'radial-gradient(circle, rgba(45,106,45,0.12) 0%, transparent 70%)', pointerEvents: 'none' }} />
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <Brain className="animate-pulse" style={{ color: '#2d6a2d' }} size={24} />
+                  <div>
+                    <h2 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'Inter, sans-serif', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      AI Distribution Assistant <Sparkles size={14} style={{ color: '#e07b2a' }} />
+                    </h2>
+                    <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                      Interactive predictions synced with Flask API
+                    </p>
+                  </div>
+                </div>
+                {aiLoading && <RefreshCw size={14} className="animate-spin" style={{ color: '#2d6a2d' }} />}
+              </div>
+
+              {/* Sandbox parameter sliders */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, backgroundColor: '#f9fbf9', padding: 14, borderRadius: 12, border: '1px solid rgba(45,106,45,0.08)', marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#2d6a2d', textTransform: 'uppercase', letterSpacing: '0.04em' }}>AI Model Parameters Sandbox</span>
+                  <button className="btn-ghost" style={{ fontSize: '0.7rem', padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 4 }} onClick={runAIPrediction}>
+                    <RefreshCw size={10} /> Recalculate
+                  </button>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  {/* Cooked hours slider */}
+                  <div>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Cooked: <b>{aiParams.cookedHoursAgo} hrs ago</b></span>
+                    <input type="range" min="0" max="24" step="0.5" value={aiParams.cookedHoursAgo}
+                      onChange={(e) => setAiParams(prev => ({ ...prev, cookedHoursAgo: e.target.value }))}
+                      style={{ width: '100%', height: 4, background: '#e2e8f0', borderRadius: 2, cursor: 'pointer' }}
+                    />
+                  </div>
+
+                  {/* Temperature slider */}
+                  <div>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Temp: <b>{aiParams.temperatureC}°C</b></span>
+                    <input type="range" min="10" max="45" value={aiParams.temperatureC}
+                      onChange={(e) => setAiParams(prev => ({ ...prev, temperatureC: e.target.value }))}
+                      style={{ width: '100%', height: 4, background: '#e2e8f0', borderRadius: 2, cursor: 'pointer' }}
+                    />
+                  </div>
+
+                  {/* Humidity slider */}
+                  <div>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Humidity: <b>{aiParams.humidity}%</b></span>
+                    <input type="range" min="10" max="100" value={aiParams.humidity}
+                      onChange={(e) => setAiParams(prev => ({ ...prev, humidity: e.target.value }))}
+                      style={{ width: '100%', height: 4, background: '#e2e8f0', borderRadius: 2, cursor: 'pointer' }}
+                    />
+                  </div>
+
+                  {/* Guest count slider */}
+                  <div>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Guest Count: <b>{aiParams.guestCount}</b></span>
+                    <input type="range" min="10" max="300" step="5" value={aiParams.guestCount}
+                      onChange={(e) => setAiParams(prev => ({ ...prev, guestCount: e.target.value }))}
+                      style={{ width: '100%', height: 4, background: '#e2e8f0', borderRadius: 2, cursor: 'pointer' }}
+                    />
+                  </div>
+
+                  {/* Prepared food slider */}
+                  <div>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Prepared: <b>{aiParams.foodPreparedKg} kg</b></span>
+                    <input type="range" min="5" max="150" value={aiParams.foodPreparedKg}
+                      onChange={(e) => setAiParams(prev => ({ ...prev, foodPreparedKg: e.target.value }))}
+                      style={{ width: '100%', height: 4, background: '#e2e8f0', borderRadius: 2, cursor: 'pointer' }}
+                    />
+                  </div>
+
+                  {/* Event Type */}
+                  <div>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 2 }}>Event Type</span>
+                    <select value={aiParams.eventType}
+                      onChange={(e) => setAiParams(prev => ({ ...prev, eventType: e.target.value }))}
+                      style={{ width: '100%', fontSize: '0.75rem', padding: '2px 4px', border: '1px solid var(--border)', borderRadius: 4 }}
+                    >
+                      <option value="wedding">Wedding</option>
+                      <option value="party">Party</option>
+                      <option value="corporate">Corporate</option>
+                      <option value="private">Private Event</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Predictions Display */}
+              {aiResults && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  
+                  {/* Freshness & Waste Grid */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    
+                    {/* Freshness card */}
+                    <div style={{ 
+                      padding: 12, 
+                      borderRadius: 10, 
+                      border: '1px solid', 
+                      borderColor: aiResults.freshness_prediction === 'fresh' ? 'rgba(45,106,45,0.2)' : 'rgba(220,38,38,0.2)',
+                      background: aiResults.freshness_prediction === 'fresh' ? 'rgba(45,106,45,0.03)' : 'rgba(220,38,38,0.03)'
+                    }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>Decision Tree Freshness</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                        {aiResults.freshness_prediction === 'fresh' ? (
+                          <>
+                            <CheckCircle size={16} style={{ color: '#2d6a2d' }} />
+                            <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#2d6a2d' }}>Fresh</span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertTriangle size={16} style={{ color: '#dc2626' }} />
+                            <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#dc2626' }}>Spoiled Warning</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Waste prediction card */}
+                    <div style={{ 
+                      padding: 12, 
+                      borderRadius: 10, 
+                      border: '1px solid rgba(224,123,42,0.2)', 
+                      background: 'rgba(224,123,42,0.03)'
+                    }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>Regression Waste Quantity</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                        <Trash2 size={16} style={{ color: '#e07b2a' }} />
+                        <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#e07b2a' }}>{aiResults.expected_waste_kg} kg</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* NGO Recommendations */}
+                  <div style={{ borderTop: '1px dashed var(--border)', paddingTop: 12 }}>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 8 }}>Recommended NGOs (Live Matching Score)</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {aiResults.ngo_recommendations && aiResults.ngo_recommendations.map((ngo, index) => (
+                        <div key={index} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '8px 12px',
+                          background: index === 0 ? 'rgba(45,106,45,0.05)' : 'white',
+                          border: index === 0 ? '1px solid rgba(45,106,45,0.2)' : '1px solid var(--border)',
+                          borderRadius: 8,
+                          fontSize: '0.78rem',
+                          transition: 'transform 0.2s'
+                        }}
+                        className="hover:scale-[1.02]"
+                        >
+                          <div>
+                            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{ngo.ngo_name}</span>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginLeft: 6 }}>({ngo.ngo_type})</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                              <span>📍 {ngo.distance_km} km</span>
+                              <span>Available cap: {ngo.available_capacity} kg</span>
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ 
+                              background: index === 0 ? '#2d6a2d' : '#475569', 
+                              color: 'white', 
+                              padding: '2px 6px', 
+                              borderRadius: 4, 
+                              fontWeight: 700, 
+                              fontSize: '0.7rem' 
+                            }}>
+                              Score: {ngo.score}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Computer Vision Feature */}
+                  <div style={{ borderTop: '1px dashed var(--border)', paddingTop: 12 }}>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Computer Vision Freshness Analyzer</span>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                      <button 
+                        type="button"
+                        onClick={() => handleCVFreshnessTest('datasets/fresh_food_sample.jpg', 'Fresh Salad Sample')}
+                        style={{
+                          flex: 1,
+                          padding: '8px 10px',
+                          borderRadius: 6,
+                          fontSize: '0.73rem',
+                          border: selectedSampleImage === 'Fresh Salad Sample' ? '1px solid #2d6a2d' : '1px solid var(--border)',
+                          background: selectedSampleImage === 'Fresh Salad Sample' ? 'rgba(45,106,45,0.06)' : 'white',
+                          cursor: 'pointer',
+                          fontWeight: 600
+                        }}
+                      >
+                        🥗 Fresh Salad
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => handleCVFreshnessTest('datasets/spoiled_food_sample.jpg', 'Spoiled Bread Sample')}
+                        style={{
+                          flex: 1,
+                          padding: '8px 10px',
+                          borderRadius: 6,
+                          fontSize: '0.73rem',
+                          border: selectedSampleImage === 'Spoiled Bread Sample' ? '1px solid #dc2626' : '1px solid var(--border)',
+                          background: selectedSampleImage === 'Spoiled Bread Sample' ? 'rgba(220,38,38,0.06)' : 'white',
+                          cursor: 'pointer',
+                          fontWeight: 600
+                        }}
+                      >
+                        🍞 Spoiled Bread
+                      </button>
+                    </div>
+
+                    {cvResult && (
+                      <div style={{ 
+                        marginTop: 10,
+                        padding: '8px 12px',
+                        borderRadius: 6,
+                        border: '1px dashed rgba(0,0,0,0.1)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        background: '#f8fafc'
+                      }}>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <Image size={12} /> {selectedSampleImage}:
+                        </span>
+                        <span style={{ 
+                          fontSize: '0.75rem', 
+                          fontWeight: 700, 
+                          color: cvResult === 'fresh' ? '#2d6a2d' : '#dc2626'
+                        }}>
+                          {cvResult === 'fresh' ? '✅ Fresh detected' : '⚠️ Spoiled / Expired detected'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+              )}
+            </div>
+
+          </div>
 
           {/* My Donations */}
           <div className="card" style={{ padding: 24 }}>
